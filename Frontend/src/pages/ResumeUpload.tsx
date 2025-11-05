@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -10,44 +10,68 @@ import Header from "@/components/Header";
 const ResumeUpload = () => {
   const [file, setFile] = useState<File | null>(null);
   const [extractedSkills, setExtractedSkills] = useState<string[]>([]);
+  const [isParsing, setIsParsing] = useState<boolean>(false);
+  const [parsed, setParsed] = useState<{ name?: string | null; email?: string | null; phone?: string | null; education?: string[]; experience?: string[] } | null>(null);
   const [recommendations, setRecommendations] = useState<any[]>([]);
   const { toast } = useToast();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const uploadedFile = event.target.files?.[0];
     if (uploadedFile) {
       setFile(uploadedFile);
-      // Simulate skill extraction
-      setExtractedSkills([
-        "JavaScript", "React", "Python", "Data Analysis", 
-        "Project Management", "Communication", "Problem Solving"
-      ]);
-      toast({
-        title: "Resume uploaded successfully!",
-        description: "Skills have been extracted from your resume.",
-      });
+      setIsParsing(true);
+      setParsed(null);
+      setExtractedSkills([]);
+      setRecommendations([]);
+      try {
+        const form = new FormData();
+        form.append("file", uploadedFile);
+        const analyzeUrl =
+          import.meta.env.VITE_ANALYZE_URL ||
+          import.meta.env.VITE_RECOMMENDER_URL ||
+          "http://127.0.0.1:8000/analyze";
+        const res = await fetch(analyzeUrl, {
+          method: "POST",
+          body: form,
+        });
+        if (!res.ok) throw new Error(`Recommend failed: ${res.status}`);
+        const data = await res.json();
+        if (Array.isArray(data.recommendations)) setRecommendations(data.recommendations);
+        if (Array.isArray(data.skills)) setExtractedSkills(data.skills);
+        toast({ title: "Recommendations ready", description: "Top roles generated from your resume." });
+      } catch (err: any) {
+        toast({ title: "Parsing error", description: err?.message || "Failed to fetch", variant: "destructive" });
+      } finally {
+        setIsParsing(false);
+      }
     }
   };
 
-  const getCareerRecommendations = () => {
-    // Simulate AI recommendations
-    setRecommendations([
-      {
-        title: "Frontend Developer",
-        probability: 92,
-        explanation: "Your strong JavaScript and React skills make you an excellent candidate for frontend development roles. Your project management experience adds valuable leadership capabilities."
-      },
-      {
-        title: "Full Stack Developer", 
-        probability: 87,
-        explanation: "Combining your frontend skills with Python backend knowledge positions you well for full stack roles. Your communication skills are essential for cross-functional collaboration."
-      },
-      {
-        title: "Technical Project Manager",
-        probability: 78,
-        explanation: "Your technical background combined with demonstrated project management and communication skills make you ideal for bridging technical teams and business stakeholders."
+  const getCareerRecommendations = async () => {
+    if (!file) return;
+    setIsParsing(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch(import.meta.env.VITE_RECOMMENDER_URL || "http://127.0.0.1:8000/recommend", {
+        method: "POST",
+        body: form,
+      });
+      if (!res.ok) throw new Error(`Recommend failed: ${res.status}`);
+      const data = await res.json();
+      if (Array.isArray(data.recommendations)) {
+        const top3 = [...data.recommendations]
+          .sort((a: any, b: any) => (b?.probability || 0) - (a?.probability || 0))
+          .slice(0, 3);
+        setRecommendations(top3);
       }
-    ]);
+      toast({ title: "Recommendations ready", description: "Top roles generated from your resume." });
+    } catch (err: any) {
+      toast({ title: "Recommendation error", description: err?.message || "Failed to get recommendations", variant: "destructive" });
+    } finally {
+      setIsParsing(false);
+    }
   };
 
   const handleFeedback = (positive: boolean) => {
@@ -86,46 +110,24 @@ const ResumeUpload = () => {
                   onChange={handleFileUpload}
                   className="hidden"
                   id="resume-upload"
+                  ref={fileInputRef}
                 />
-                <label htmlFor="resume-upload" className="cursor-pointer">
-                  <Button variant="outline" className="mb-2">
-                    Choose File
-                  </Button>
-                  <p className="text-sm text-muted-foreground">
-                    {file ? file.name : "PDF or DOCX files only"}
-                  </p>
-                </label>
+                <Button
+                  onClick={() => fileInputRef.current?.click()}
+                  variant="outline"
+                  className="mb-2"
+                  disabled={isParsing}
+                >
+                  {isParsing ? "Parsing..." : "Choose File"}
+                </Button>
+                <p className="text-sm text-muted-foreground">
+                  {file ? file.name : "PDF or DOCX files only"}
+                </p>
               </div>
             </CardContent>
           </Card>
 
-          {/* Extracted Skills */}
-          {extractedSkills.length > 0 && (
-            <Card className="mb-8">
-              <CardHeader>
-                <CardTitle>Detected Skills</CardTitle>
-                <CardDescription>
-                  Skills extracted from your resume
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="flex flex-wrap gap-2">
-                  {extractedSkills.map((skill, index) => (
-                    <Badge key={index} variant="secondary">
-                      {skill}
-                    </Badge>
-                  ))}
-                </div>
-                <Button 
-                  onClick={getCareerRecommendations}
-                  className="mt-4 w-full"
-                  disabled={!file}
-                >
-                  Get Career Recommendations
-                </Button>
-              </CardContent>
-            </Card>
-          )}
+          {/* Removed parsed basics and skills display; we show only top career options */}
 
           {/* Career Recommendations */}
           {recommendations.length > 0 && (
@@ -150,6 +152,16 @@ const ResumeUpload = () => {
                   <CardContent>
                     <Progress value={rec.probability} className="mb-4" />
                     <p className="text-muted-foreground mb-4">{rec.explanation}</p>
+                    {Array.isArray(rec.supportingSkills) && rec.supportingSkills.length > 0 && (
+                      <div className="mb-4">
+                        <div className="text-sm text-muted-foreground mb-2">Supporting Skills</div>
+                        <div className="flex flex-wrap gap-2">
+                          {rec.supportingSkills.map((skill: string, i: number) => (
+                            <Badge key={i} variant="secondary">{skill}</Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     
                     {/* SHAP Chart Placeholder */}
                     <div className="bg-muted rounded-lg p-4 mb-4">
